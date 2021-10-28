@@ -4,7 +4,6 @@ chai.use(sinonChai);
 
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { SinonStub } from 'sinon';
 import sinon from 'ts-sinon';
 import { GithubRepo } from './github-repo';
 
@@ -170,8 +169,8 @@ describe('GithubRepo', () => {
   });
 
   describe('updateDraftRelease', () => {
-    let createRelease: SinonStub;
-    let updateRelease: SinonStub;
+    let createRelease: sinon.SinonStub;
+    let updateRelease: sinon.SinonStub;
 
     beforeEach(() => {
       createRelease = sinon.stub();
@@ -290,9 +289,9 @@ describe('GithubRepo', () => {
   });
 
   describe('uploadReleaseAsset', () => {
-    let octoRequest: SinonStub;
-    let getReleaseByTag: SinonStub;
-    let deleteReleaseAsset: SinonStub;
+    let octoRequest: sinon.SinonStub;
+    let getReleaseByTag: sinon.SinonStub;
+    let deleteReleaseAsset: sinon.SinonStub;
 
     beforeEach(() => {
       octoRequest = sinon.stub();
@@ -455,7 +454,7 @@ describe('GithubRepo', () => {
     });
 
     describe('when release does not exist', () => {
-      let getReleaseByTag: SinonStub;
+      let getReleaseByTag: sinon.SinonStub;
       beforeEach(() => {
         getReleaseByTag = sinon.stub();
         githubRepo = getTestGithubRepo();
@@ -585,7 +584,7 @@ describe('GithubRepo', () => {
       try {
         await githubRepo.getFileContent('file/path', 'branch');
       } catch (e) {
-        return expect(e.message).to.equal(
+        return expect((e as Error).message).to.equal(
           'file/path does not reference a file'
         );
       }

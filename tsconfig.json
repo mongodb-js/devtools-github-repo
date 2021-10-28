@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "ES2018",
     "module": "commonjs",
     "strict": true,
     "outDir": "dist",
@@ -9,6 +9,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true
-  }
+  },
+  "exclude": ["./**/*.spec.ts"]
 }
 
