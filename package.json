@@ -1,5 +1,5 @@
 {
-  "name": "@mongodb-js/github-repo",
+  "name": "@mongodb-js/devtools-github-repo",
   "version": "1.0.1",
   "description": "mongodb download center internal tools",
   "main": "dist/index.js",
@@ -13,13 +13,13 @@
   },
   "keywords": [],
   "author": "",
-  "homepage": "https://github.com/mongodb-js/github-repo",
+  "homepage": "https://github.com/mongodb-js/devtools-github-repo",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mongodb-js/github-repo.git"
+    "url": "https://github.com/mongodb-js/devtools-github-repo.git"
   },
   "bugs": {
-    "url": "https://github.com/mongodb-js/github-repo/issues"
+    "url": "https://github.com/mongodb-js/devtools-github-repo/issues"
   },
   "license": "Apache-2.0",
   "engines": {
