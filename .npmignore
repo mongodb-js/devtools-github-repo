@@ -1,0 +1,6 @@
+coverage
+src
+fixtures
+tsconfig.json
+.eslintrc.js
+.editorconfig
