@@ -4,6 +4,9 @@
   "description": "mongodb download center internal tools",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "depcheck . && npm run lint",
     "test": "mocha --timeout 60000 --colors -r ts-node/register \"./src/*.spec.ts\"",
