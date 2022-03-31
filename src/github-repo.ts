@@ -66,15 +66,11 @@ async function waitFor(
   }, timeout);
   try {
     while (!done) {
-      try {
-        const res = await fn();
-        if (res) {
-          return res;
-        }
-        throw new Error('No result returned from wait fn');
-      } catch {
-        await setTimeoutAsync(interval);
+      const res = await fn();
+      if (res) {
+        return res;
       }
+      await setTimeoutAsync(interval);
     }
     throw new Error(message);
   } finally {
@@ -174,8 +170,17 @@ export class GithubRepo {
         .catch(this._ignoreAlreadyExistsError());
       // Confirm that release is created before proceedig
       await waitFor(
-        () => {
-          return this.getReleaseByTag(release.tag);
+        async() => {
+          try {
+            return await this.getReleaseByTag(release.tag);
+          } catch (err) {
+            // Handle server errors as no release found in this case to allow
+            // network hiccup retries
+            if ('status' in (err as Error & { status?: number })) {
+              return;
+            }
+            throw err;
+          }
         },
         process.env.TEST_GET_RELEASE_TIMEOUT
           ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
