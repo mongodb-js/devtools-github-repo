@@ -186,7 +186,10 @@ describe('GithubRepo', () => {
     });
 
     it('creates a new draft release', async() => {
-      githubRepo.getReleaseByTag = sinon.stub().resolves(undefined);
+      const stub = sinon.stub();
+      stub.onFirstCall().resolves(undefined);
+      stub.onSecondCall().resolves({ draft: true });
+      githubRepo.getReleaseByTag = stub;
 
       const params = {
         name: 'release',
@@ -250,7 +253,10 @@ describe('GithubRepo', () => {
     });
 
     it('fails on error', async() => {
-      githubRepo.getReleaseByTag = sinon.stub().resolves(undefined);
+      const stub = sinon.stub();
+      stub.onFirstCall().resolves(undefined);
+      stub.onSecondCall().resolves({ draft: true });
+      githubRepo.getReleaseByTag = stub;
 
       const params = {
         name: 'release',
@@ -268,7 +274,10 @@ describe('GithubRepo', () => {
     });
 
     it('ignores already exists error', async() => {
-      githubRepo.getReleaseByTag = sinon.stub().resolves(undefined);
+      const stub = sinon.stub();
+      stub.onFirstCall().resolves(undefined);
+      stub.onSecondCall().resolves({ draft: true });
+      githubRepo.getReleaseByTag = stub;
 
       const params = {
         name: 'release',
@@ -285,6 +294,31 @@ describe('GithubRepo', () => {
         body: params.notes,
         draft: true,
       });
+    });
+
+    it("fails if release doesn't exist after creating", async() => {
+      process.env.TEST_GET_RELEASE_TIMEOUT = '1000';
+
+      githubRepo.getReleaseByTag = sinon.stub().resolves(undefined);
+
+      const params = {
+        name: 'release',
+        tag: 'v0.8.0',
+        notes: 'notes',
+      };
+
+      try {
+        await githubRepo.updateDraftRelease(params);
+      } catch (e) {
+        return expect(e).to.have.property(
+          'message',
+          "Draft release \"release\" still doesn't exist after creating"
+        );
+      } finally {
+        delete process.env.TEST_GET_RELEASE_TIMEOUT;
+      }
+
+      expect.fail('Expected error');
     });
   });
 

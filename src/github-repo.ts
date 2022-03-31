@@ -3,6 +3,7 @@ import { Octokit } from '@octokit/rest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import semver from 'semver/preload';
+import { promisify } from 'util';
 
 type Repo = {
   owner: string;
@@ -50,6 +51,32 @@ type Branch = {
     url: string;
   };
 };
+
+const setTimeoutAsync = promisify(setTimeout);
+
+async function waitFor(
+  fn: (...args: unknown[]) => Promise<unknown>,
+  timeout = 10000,
+  interval = 100,
+  message = 'Timeout exceeded for task'
+) {
+  let done = false;
+  const tid = setTimeout(() => {
+    done = true;
+  }, timeout);
+  try {
+    while (!done) {
+      const res = await fn();
+      if (res) {
+        return res;
+      }
+      await setTimeoutAsync(interval);
+    }
+    throw new Error(message);
+  } finally {
+    clearTimeout(tid);
+  }
+}
 
 export class GithubRepo {
   private octokit: Octokit;
@@ -141,6 +168,26 @@ export class GithubRepo {
           draft: true,
         })
         .catch(this._ignoreAlreadyExistsError());
+      // Confirm that release is created before proceedig
+      await waitFor(
+        async() => {
+          try {
+            return await this.getReleaseByTag(release.tag);
+          } catch (err) {
+            // Handle server errors as no release found in this case to allow
+            // network hiccup retries
+            if ('status' in (err as Error & { status?: number })) {
+              return;
+            }
+            throw err;
+          }
+        },
+        process.env.TEST_GET_RELEASE_TIMEOUT
+          ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
+          : 10000,
+        100,
+        `Draft release "${release.name}" still doesn't exist after creating`
+      );
     } else if (!existingRelease.draft) {
       throw new Error(
         'Cannot update an existing release after it was published'
