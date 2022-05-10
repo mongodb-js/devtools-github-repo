@@ -52,6 +52,7 @@
   },
   "release-it": {},
   "dependencies": {
+    "@types/debug": "^4.1.7",
     "debug": "^4.3.4"
   }
 }
