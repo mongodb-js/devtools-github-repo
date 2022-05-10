@@ -242,7 +242,7 @@ export class GithubRepo {
     };
 
     const githubRateLimit = await this.octokit.request('GET /rate_limit', {});
-    console.dir({ githubRateLimit: githubRateLimit.data }, { depth: Infinity });
+    console.dir({ githubRateLimit: githubRateLimit?.data }, { depth: Infinity });
 
     await this.octokit.request(params)
       // It shouldn't be possible for the asset to already exist due to the check above, but here we are.
