@@ -220,11 +220,15 @@ export class GithubRepo {
       (a) => a.name === assetName
     );
 
+    const existingAssets = releaseDetails.assets?.map((a) => a.name);
+
     if (existingAsset) {
       await this.octokit.repos.deleteReleaseAsset({
         ...this.repo,
         asset_id: existingAsset.id,
       });
+    } else {
+      console.log('could not find the asset in the existing assets', { assetName, existingAssets });
     }
 
     const params = {
@@ -237,7 +241,12 @@ export class GithubRepo {
       data: await fs.readFile(asset.path),
     };
 
-    await this.octokit.request(params);
+    const githubRateLimit = await this.octokit.request('GET /rate_limit', {});
+    console.dir({ githubRateLimit: githubRateLimit.data }, { depth: Infinity });
+
+    await this.octokit.request(params)
+      // It shouldn't be possible for the asset to already exist due to the check above, but here we are.
+      .catch(this._ignoreAlreadyExistsError());
   }
 
   async getReleaseByTag(tag: string): Promise<ReleaseDetails | undefined> {
