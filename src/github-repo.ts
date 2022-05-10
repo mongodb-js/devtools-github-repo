@@ -6,6 +6,7 @@ import semver from 'semver/preload';
 import { promisify } from 'util';
 import Debug from 'debug';
 
+// eslint-disable-next-line new-cap
 const debug = Debug('devtools-github-repo');
 
 type Repo = {
