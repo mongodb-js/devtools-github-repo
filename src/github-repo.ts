@@ -4,6 +4,10 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import semver from 'semver/preload';
 import { promisify } from 'util';
+import Debug from 'debug';
+
+// eslint-disable-next-line new-cap
+const debug = Debug('devtools-github-repo');
 
 type Repo = {
   owner: string;
@@ -220,11 +224,15 @@ export class GithubRepo {
       (a) => a.name === assetName
     );
 
+    const existingAssets = releaseDetails.assets?.map((a) => a.name);
+
     if (existingAsset) {
       await this.octokit.repos.deleteReleaseAsset({
         ...this.repo,
         asset_id: existingAsset.id,
       });
+    } else {
+      debug('could not find the asset in the existing assets %o', { assetName, existingAssets });
     }
 
     const params = {
@@ -237,7 +245,12 @@ export class GithubRepo {
       data: await fs.readFile(asset.path),
     };
 
-    await this.octokit.request(params);
+    const githubRateLimit = await this.octokit.request('GET /rate_limit', {});
+    debug('%o', { githubRateLimit: githubRateLimit?.data });
+
+    await this.octokit.request(params)
+      // It shouldn't be possible for the asset to already exist due to the check above, but here we are.
+      .catch(this._ignoreAlreadyExistsError());
   }
 
   async getReleaseByTag(tag: string): Promise<ReleaseDetails | undefined> {
@@ -259,7 +272,7 @@ export class GithubRepo {
     }
 
     if (!releaseDetails.draft) {
-      console.info(`Release for ${tag} is already public.`);
+      debug(`Release for ${tag} is already public.`);
       return releaseDetails.html_url;
     }
 
