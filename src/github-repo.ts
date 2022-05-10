@@ -4,6 +4,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import semver from 'semver/preload';
 import { promisify } from 'util';
+import Debug from 'debug';
+
+const debug = Debug('devtools-github-repo');
 
 type Repo = {
   owner: string;
@@ -228,7 +231,7 @@ export class GithubRepo {
         asset_id: existingAsset.id,
       });
     } else {
-      console.log('could not find the asset in the existing assets', { assetName, existingAssets });
+      debug('could not find the asset in the existing assets %o', { assetName, existingAssets });
     }
 
     const params = {
@@ -242,7 +245,7 @@ export class GithubRepo {
     };
 
     const githubRateLimit = await this.octokit.request('GET /rate_limit', {});
-    console.dir({ githubRateLimit: githubRateLimit?.data }, { depth: Infinity });
+    debug('%o', { githubRateLimit: githubRateLimit?.data });
 
     await this.octokit.request(params)
       // It shouldn't be possible for the asset to already exist due to the check above, but here we are.
@@ -268,7 +271,7 @@ export class GithubRepo {
     }
 
     if (!releaseDetails.draft) {
-      console.info(`Release for ${tag} is already public.`);
+      debug(`Release for ${tag} is already public.`);
       return releaseDetails.html_url;
     }
 
