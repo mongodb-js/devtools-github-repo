@@ -369,6 +369,30 @@ describe('GithubRepo', () => {
       });
     });
 
+    it('uploads multiple assets', async() => {
+      const release = {
+        name: 'release',
+        tag: 'v0.8.0',
+        notes: '',
+      };
+      getReleaseByTag.resolves({
+        upload_url: 'url',
+      });
+
+      await githubRepo.uploadReleaseAsset(release.tag, [
+        {
+          path: path.resolve(__dirname, 'github-repo.spec.ts'),
+          contentType: 'xyz',
+        },
+        {
+          path: path.resolve(__dirname, 'github-repo.ts'),
+          contentType: 'xyz',
+        },
+      ]);
+
+      expect(octoRequest).to.have.been.calledTwice;
+    });
+
     it('updates an existing asset by removing the old one first', async() => {
       const release = {
         name: 'release',
