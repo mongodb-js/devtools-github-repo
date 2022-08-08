@@ -204,17 +204,7 @@ export class GithubRepo {
     }
   }
 
-  /**
-   * Uploads an asset for a Github release, if the assets already exists
-   * it will be removed and re-uploaded.
-   */
-  async uploadReleaseAsset(releaseTag: string, asset: Asset): Promise<void> {
-    const releaseDetails = await this.getReleaseByTag(releaseTag);
-
-    if (releaseDetails === undefined) {
-      throw new Error(`Could not look up release for tag ${releaseTag}`);
-    }
-
+  async _uploadAsset(releaseDetails: ReleaseDetails, asset: Asset): Promise<void> {
     const assetName = asset.name ?? path.basename(asset.path);
     const existingAsset = releaseDetails.assets?.find(
       (a) => a.name === assetName
@@ -238,6 +228,24 @@ export class GithubRepo {
     };
 
     await this.octokit.request(params);
+  }
+
+  /**
+   * Uploads an asset (or multiple assets) for a Github release, if the assets
+   * already exists it will be removed and re-uploaded.
+   */
+  async uploadReleaseAsset(releaseTag: string, assets: Asset | Asset[]): Promise<void> {
+    const releaseDetails = await this.getReleaseByTag(releaseTag);
+    if (releaseDetails === undefined) {
+      throw new Error(`Could not look up release for tag ${releaseTag}`);
+    }
+    if (!Array.isArray(assets)) {
+      assets = [assets];
+    }
+    // Doing in sequence to not overload GitHub with requests
+    for (const asset of assets) {
+      await this._uploadAsset(releaseDetails, asset);
+    }
   }
 
   async getReleaseByTag(tag: string): Promise<ReleaseDetails | undefined> {
