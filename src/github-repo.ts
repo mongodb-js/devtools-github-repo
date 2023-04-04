@@ -244,7 +244,17 @@ export class GithubRepo {
     }
     // Doing in sequence to not overload GitHub with requests
     for (const asset of assets) {
-      await this._uploadAsset(releaseDetails, asset);
+      try {
+        await this._uploadAsset(releaseDetails, asset);
+      } catch (err) {
+        if ((err as Error)?.message?.includes('ECONNRESET')) {
+          // Sometimes GitHub returns ECONNRESET errors, wait a second and retry.
+          await setTimeoutAsync(1000);
+          await this._uploadAsset(releaseDetails, asset);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
