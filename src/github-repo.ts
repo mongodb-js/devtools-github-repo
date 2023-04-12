@@ -248,7 +248,8 @@ export class GithubRepo {
       try {
         await this._uploadAsset(releaseDetails, asset);
       } catch (err) {
-        if ((err as OctokitRequestError)?.status === 500) {
+        const status = (err as OctokitRequestError)?.status;
+        if (status >= 500 && status <= 599) {
           // Sometimes GitHub returns ECONNRESET errors, wait a second and retry.
           await setTimeoutAsync(1000);
           await this._uploadAsset(releaseDetails, asset);
