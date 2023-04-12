@@ -1,5 +1,6 @@
 /* eslint-disable camelcase */
 import { Octokit } from '@octokit/rest';
+import type { RequestError as OctokitRequestError } from '@octokit/types';
 import { promises as fs } from 'fs';
 import path from 'path';
 import semver from 'semver/preload';
@@ -168,7 +169,7 @@ export class GithubRepo {
           draft: true,
         })
         .catch(this._ignoreAlreadyExistsError());
-      // Confirm that release is created before proceedig
+      // Confirm that release is created before proceeding
       await waitFor(
         async() => {
           try {
@@ -247,7 +248,7 @@ export class GithubRepo {
       try {
         await this._uploadAsset(releaseDetails, asset);
       } catch (err) {
-        if ((err as Error)?.message?.includes('ECONNRESET')) {
+        if ((err as OctokitRequestError)?.status === 500) {
           // Sometimes GitHub returns ECONNRESET errors, wait a second and retry.
           await setTimeoutAsync(1000);
           await this._uploadAsset(releaseDetails, asset);

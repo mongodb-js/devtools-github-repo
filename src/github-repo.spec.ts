@@ -431,7 +431,7 @@ describe('GithubRepo', () => {
       });
     });
 
-    it('retries once if the error is ECONNRESET', async() => {
+    it('retries once if the error is 500', async() => {
       const release = {
         name: 'release',
         tag: 'v0.8.0',
@@ -449,7 +449,11 @@ describe('GithubRepo', () => {
       });
       deleteReleaseAsset.resolves();
 
-      octoRequest.rejects(new Error('ECONNRESET'));
+      const error: Error & {
+        status?: number;
+      } = new Error('ECONNRESET');
+      error.status = 500;
+      octoRequest.rejects(error);
 
       try {
         await githubRepo.uploadReleaseAsset(release.tag, {
