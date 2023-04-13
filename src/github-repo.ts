@@ -1,5 +1,6 @@
 /* eslint-disable camelcase */
 import { Octokit } from '@octokit/rest';
+import type { RequestError as OctokitRequestError } from '@octokit/types';
 import { promises as fs } from 'fs';
 import path from 'path';
 import semver from 'semver/preload';
@@ -168,7 +169,7 @@ export class GithubRepo {
           draft: true,
         })
         .catch(this._ignoreAlreadyExistsError());
-      // Confirm that release is created before proceedig
+      // Confirm that release is created before proceeding
       await waitFor(
         async() => {
           try {
@@ -244,7 +245,18 @@ export class GithubRepo {
     }
     // Doing in sequence to not overload GitHub with requests
     for (const asset of assets) {
-      await this._uploadAsset(releaseDetails, asset);
+      try {
+        await this._uploadAsset(releaseDetails, asset);
+      } catch (err) {
+        const status = (err as OctokitRequestError)?.status;
+        if (status >= 500 && status <= 599) {
+          // Sometimes GitHub returns ECONNRESET errors, wait a second and retry.
+          await setTimeoutAsync(1000);
+          await this._uploadAsset(releaseDetails, asset);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 

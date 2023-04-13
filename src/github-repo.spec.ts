@@ -431,6 +431,46 @@ describe('GithubRepo', () => {
       });
     });
 
+    it('retries once if the error is 500', async() => {
+      const release = {
+        name: 'release',
+        tag: 'v0.8.0',
+        notes: '',
+      };
+      getReleaseByTag.resolves({
+        upload_url: 'url',
+        assets: [
+          {
+            id: 1,
+            name: path.basename(__filename),
+            url: 'assetUrl',
+          },
+        ],
+      });
+      deleteReleaseAsset.resolves();
+
+      const error: Error & {
+        status?: number;
+      } = new Error('ECONNRESET');
+      error.status = 500;
+      octoRequest.rejects(error);
+
+      try {
+        await githubRepo.uploadReleaseAsset(release.tag, {
+          path: __filename,
+          contentType: 'xyz',
+        });
+      } catch (e) {
+        expect(deleteReleaseAsset).to.have.been.calledTwice;
+        expect(octoRequest).to.have.been.calledTwice;
+
+        return expect((e as Error).message).to.contain(
+          'ECONNRESET'
+        );
+      }
+      expect.fail('Expected error');
+    });
+
     it('fails if no release can be found', async() => {
       const release = {
         name: 'release',
