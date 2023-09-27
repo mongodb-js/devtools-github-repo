@@ -55,12 +55,12 @@ type Branch = {
 
 const setTimeoutAsync = promisify(setTimeout);
 
-async function waitFor(
-  fn: (...args: unknown[]) => Promise<unknown>,
-  timeout = 10000,
+async function waitFor<T>(
+  fn: (...args: unknown[]) => Promise<T | undefined>,
+  timeout = 60_000,
   interval = 100,
-  message = 'Timeout exceeded for task'
-) {
+  message: string | (() => string) = 'Timeout exceeded for task'
+): Promise<T> {
   let done = false;
   const tid = setTimeout(() => {
     done = true;
@@ -68,12 +68,12 @@ async function waitFor(
   try {
     while (!done) {
       const res = await fn();
-      if (res) {
+      if (typeof res !== 'undefined') {
         return res;
       }
       await setTimeoutAsync(interval);
     }
-    throw new Error(message);
+    throw new Error(typeof message === 'function' ? message() : message);
   } finally {
     clearTimeout(tid);
   }
@@ -158,8 +158,13 @@ export class GithubRepo {
    * @param release The release details
    */
   async updateDraftRelease(release: Release): Promise<void> {
-    const existingRelease = await this.getReleaseByTag(release.tag);
-    if (!existingRelease) {
+    let existingRelease: ReleaseDetails | null = null;
+
+    try {
+      existingRelease = await this.getReleaseByTag(release.tag);
+    } catch {
+      // If we failed to get release by tag for whatever reason, try creating a
+      // new one
       await this.octokit.repos
         .createRelease({
           ...this.repo,
@@ -169,27 +174,11 @@ export class GithubRepo {
           draft: true,
         })
         .catch(this._ignoreAlreadyExistsError());
-      // Confirm that release is created before proceeding
-      await waitFor(
-        async() => {
-          try {
-            return await this.getReleaseByTag(release.tag);
-          } catch (err) {
-            // Handle server errors as no release found in this case to allow
-            // network hiccup retries
-            if ('status' in (err as Error & { status?: number })) {
-              return;
-            }
-            throw err;
-          }
-        },
-        process.env.TEST_GET_RELEASE_TIMEOUT
-          ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
-          : 10000,
-        100,
-        `Draft release "${release.name}" still doesn't exist after creating`
-      );
-    } else if (!existingRelease.draft) {
+
+      existingRelease = await this.getReleaseByTag(release.tag);
+    }
+
+    if (!existingRelease.draft) {
       throw new Error(
         'Cannot update an existing release after it was published'
       );
@@ -205,17 +194,31 @@ export class GithubRepo {
     }
   }
 
-  async _uploadAsset(releaseDetails: ReleaseDetails, asset: Asset): Promise<void> {
+  async _uploadAsset(
+    releaseDetails: ReleaseDetails,
+    asset: Asset
+  ): Promise<boolean> {
     const assetName = asset.name ?? path.basename(asset.path);
     const existingAsset = releaseDetails.assets?.find(
       (a) => a.name === assetName
     );
 
     if (existingAsset) {
-      await this.octokit.repos.deleteReleaseAsset({
-        ...this.repo,
-        asset_id: existingAsset.id,
-      });
+      try {
+        await this.octokit.repos.deleteReleaseAsset({
+          ...this.repo,
+          asset_id: existingAsset.id,
+        });
+      } catch (err) {
+        if ((err as OctokitRequestError).status === 404) {
+          // Sometimes the file would be in release details, but not acually
+          // fully uploaded (potentially on retries?), leading to 404 errors
+          // when trying to delete it. Ignore 404 errors for that reason. If
+          // file actually exists, trying to upload it will fail anyway even if
+          // we ignored the error here
+        }
+        throw err;
+      }
     }
 
     const params = {
@@ -229,6 +232,8 @@ export class GithubRepo {
     };
 
     await this.octokit.request(params);
+
+    return true;
   }
 
   /**
@@ -237,46 +242,77 @@ export class GithubRepo {
    */
   async uploadReleaseAsset(releaseTag: string, assets: Asset | Asset[]): Promise<void> {
     const releaseDetails = await this.getReleaseByTag(releaseTag);
-    if (releaseDetails === undefined) {
-      throw new Error(`Could not look up release for tag ${releaseTag}`);
-    }
     if (!Array.isArray(assets)) {
       assets = [assets];
     }
     // Doing in sequence to not overload GitHub with requests
     for (const asset of assets) {
-      try {
-        await this._uploadAsset(releaseDetails, asset);
-      } catch (err) {
-        const status = (err as OctokitRequestError)?.status;
-        if (status >= 500 && status <= 599) {
-          // Sometimes GitHub returns ECONNRESET errors, wait a second and retry.
-          await setTimeoutAsync(1000);
-          await this._uploadAsset(releaseDetails, asset);
-        } else {
-          throw err;
+      let lastError: Error | null = null;
+      await waitFor(
+        async() => {
+          try {
+            return await this._uploadAsset(releaseDetails, asset);
+          } catch (err) {
+            lastError = err as Error;
+            // Allow to retry the upload if any server error was returned from
+            // octokit
+            if ('status' in (err as OctokitRequestError)) {
+              return;
+            }
+            throw err;
+          }
+        },
+        process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT
+          ? Number(process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT)
+        // File upload is slow, we allow 5 minutes per file to allow for
+        // additional retries
+          : 60_000 * 5,
+        100,
+        () => {
+          return `Failed to upload asset ${asset.name}` + lastError
+            ? `\n\nLast encountered error:\n\n${lastError?.stack}`
+            : '';
         }
-      }
+      );
     }
   }
 
-  async getReleaseByTag(tag: string): Promise<ReleaseDetails | undefined> {
-    const releases = await this.octokit.paginate<ReleaseDetails>(
-      'GET /repos/:owner/:repo/releases',
-      this.repo
+  async getReleaseByTag(tag: string): Promise<ReleaseDetails> {
+    let lastError: Error | null = null;
+    return await waitFor(
+      async() => {
+        try {
+          const releases = await this.octokit.paginate<ReleaseDetails>(
+            'GET /repos/:owner/:repo/releases',
+            this.repo
+          );
+          return releases.find(({ tag_name }) => tag_name === tag);
+        } catch (err) {
+          lastError = err as Error;
+          // Handle server errors as no release found in this case to allow
+          // network hiccup retries
+          if ('status' in (err as OctokitRequestError)) {
+            return;
+          }
+          throw err;
+        }
+      },
+      process.env.TEST_GET_RELEASE_TIMEOUT
+        ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
+        : 60_000,
+      100,
+      () => {
+        return 'Can\'t fetch releases from GitHub' + lastError
+          ? `\n\nLast encountered error:\n\n${lastError?.stack}`
+          : '';
+      }
     );
-
-    return releases.find(({ tag_name }) => tag_name === tag);
   }
 
   async promoteRelease(config: {version: string}): Promise<string> {
     const tag = `v${config.version}`;
 
     const releaseDetails = await this.getReleaseByTag(tag);
-
-    if (!releaseDetails) {
-      throw new Error(`Release for ${tag} not found.`);
-    }
 
     if (!releaseDetails.draft) {
       console.info(`Release for ${tag} is already public.`);
