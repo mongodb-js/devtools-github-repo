@@ -55,25 +55,51 @@ type Branch = {
 
 const setTimeoutAsync = promisify(setTimeout);
 
+function throwRetryableError(message: string): never {
+  const err = new Error(message);
+  (err as any).retry = true;
+  throw err;
+}
+
+function isRetryableError(err: any): boolean {
+  return err.retry === true;
+}
+
+function isOctokitError(err: any): err is OctokitRequestError {
+  return 'status' in err;
+}
+
 async function waitFor<T>(
-  fn: (...args: unknown[]) => Promise<T | undefined>,
+  fn: (...args: unknown[]) => Promise<T>,
   timeout = 60_000,
   interval = 100,
-  message: string | (() => string) = 'Timeout exceeded for task'
+  message: string | ((err: any) => string) = 'Timeout exceeded for task',
+  signal?: AbortSignal
 ): Promise<T> {
-  let done = false;
+  let lastError: any;
+  const controller = new AbortController();
+  // eslint-disable-next-line chai-friendly/no-unused-expressions
+  signal?.addEventListener('abort', () => {
+    controller.abort(signal.reason);
+  });
   const tid = setTimeout(() => {
-    done = true;
+    controller.abort(
+      signal?.reason ??
+        new Error(typeof message === 'function' ? message(lastError) : message)
+    );
   }, timeout);
   try {
-    while (!done) {
-      const res = await fn();
-      if (typeof res !== 'undefined') {
-        return res;
+    while (!controller.signal.aborted) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+        await setTimeoutAsync(interval);
       }
-      await setTimeoutAsync(interval);
     }
-    throw new Error(typeof message === 'function' ? message() : message);
+    // If we ended up here either timeout expired or passed signal was aborted,
+    // either way this inter
+    throw controller.signal.reason;
   } finally {
     clearTimeout(tid);
   }
@@ -247,38 +273,35 @@ export class GithubRepo {
     }
     // Doing in sequence to not overload GitHub with requests
     for (const asset of assets) {
-      let lastError: Error | null = null;
+      const controller = new AbortController();
       await waitFor(
         async() => {
           try {
-            return await this._uploadAsset(releaseDetails, asset);
+            await this._uploadAsset(releaseDetails, asset);
           } catch (err) {
-            lastError = err as Error;
-            // Allow to retry the upload if any server error was returned from
-            // octokit
-            if ('status' in (err as OctokitRequestError)) {
-              return;
+            if (!isOctokitError(err) && !isRetryableError(err)) {
+              controller.abort(err);
             }
             throw err;
           }
         },
         process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT
           ? Number(process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT)
-        // File upload is slow, we allow 5 minutes per file to allow for
-        // additional retries
+          // File upload is slow, we allow 5 minutes per file to allow for additional retries
           : 60_000 * 5,
         100,
-        () => {
+        (lastError) => {
           return `Failed to upload asset ${asset.name}` + lastError
             ? `\n\nLast encountered error:\n\n${lastError?.stack}`
             : '';
-        }
+        },
+        controller.signal
       );
     }
   }
 
   async getReleaseByTag(tag: string): Promise<ReleaseDetails> {
-    let lastError: Error | null = null;
+    const controller = new AbortController();
     return await waitFor(
       async() => {
         try {
@@ -286,13 +309,16 @@ export class GithubRepo {
             'GET /repos/:owner/:repo/releases',
             this.repo
           );
-          return releases.find(({ tag_name }) => tag_name === tag);
+          const taggedRelease = releases.find(
+            ({ tag_name }) => tag_name === tag
+          );
+          if (!taggedRelease) {
+            throwRetryableError(`Can\'t find release with a tag ${tag}`);
+          }
+          return taggedRelease;
         } catch (err) {
-          lastError = err as Error;
-          // Handle server errors as no release found in this case to allow
-          // network hiccup retries
-          if ('status' in (err as OctokitRequestError)) {
-            return;
+          if (!isOctokitError(err) && !isRetryableError(err)) {
+            controller.abort(err);
           }
           throw err;
         }
@@ -301,11 +327,12 @@ export class GithubRepo {
         ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
         : 60_000,
       100,
-      () => {
-        return 'Can\'t fetch releases from GitHub' + lastError
+      (lastError) => {
+        return "Can't fetch releases from GitHub" + lastError
           ? `\n\nLast encountered error:\n\n${lastError?.stack}`
           : '';
-      }
+      },
+      controller.signal
     );
   }
 
