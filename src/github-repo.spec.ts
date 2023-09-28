@@ -187,7 +187,7 @@ describe('GithubRepo', () => {
 
     it('creates a new draft release', async() => {
       const stub = sinon.stub();
-      stub.onFirstCall().resolves(undefined);
+      stub.onFirstCall().rejects(new Error('no release'));
       stub.onSecondCall().resolves({ draft: true });
       githubRepo.getReleaseByTag = stub;
 
@@ -254,7 +254,7 @@ describe('GithubRepo', () => {
 
     it('fails on error', async() => {
       const stub = sinon.stub();
-      stub.onFirstCall().resolves(undefined);
+      stub.onFirstCall().rejects(new Error('no release'));
       stub.onSecondCall().resolves({ draft: true });
       githubRepo.getReleaseByTag = stub;
 
@@ -267,15 +267,15 @@ describe('GithubRepo', () => {
       createRelease.rejects(expectedError);
       try {
         await githubRepo.updateDraftRelease(params);
+        expect.fail('Expected updateDraftRelease to throw');
       } catch (e) {
-        return expect(e).to.equal(expectedError);
+        expect(e).to.equal(expectedError);
       }
-      expect.fail('Expected error');
     });
 
     it('ignores already exists error', async() => {
       const stub = sinon.stub();
-      stub.onFirstCall().resolves(undefined);
+      stub.onFirstCall().rejects(new Error('no release'));
       stub.onSecondCall().resolves({ draft: true });
       githubRepo.getReleaseByTag = stub;
 
@@ -297,9 +297,7 @@ describe('GithubRepo', () => {
     });
 
     it("fails if release doesn't exist after creating", async() => {
-      process.env.TEST_GET_RELEASE_TIMEOUT = '1000';
-
-      githubRepo.getReleaseByTag = sinon.stub().resolves(undefined);
+      githubRepo.getReleaseByTag = sinon.stub().rejects(new Error('no release'));
 
       const params = {
         name: 'release',
@@ -309,16 +307,13 @@ describe('GithubRepo', () => {
 
       try {
         await githubRepo.updateDraftRelease(params);
+        expect.fail('Expected updateDraftRelease to throw');
       } catch (e) {
-        return expect(e).to.have.property(
+        expect(e).to.have.property(
           'message',
-          "Draft release \"release\" still doesn't exist after creating"
+          'no release'
         );
-      } finally {
-        delete process.env.TEST_GET_RELEASE_TIMEOUT;
       }
-
-      expect.fail('Expected error');
     });
   });
 
@@ -326,6 +321,14 @@ describe('GithubRepo', () => {
     let octoRequest: sinon.SinonStub;
     let getReleaseByTag: sinon.SinonStub;
     let deleteReleaseAsset: sinon.SinonStub;
+
+    before(function() {
+      process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT = '1000';
+    });
+
+    after(function() {
+      delete process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT;
+    });
 
     beforeEach(() => {
       octoRequest = sinon.stub();
@@ -431,44 +434,27 @@ describe('GithubRepo', () => {
       });
     });
 
-    it('retries once if the error is 500', async() => {
+    it('retries if octokit returned an error', async() => {
       const release = {
         name: 'release',
         tag: 'v0.8.0',
         notes: '',
       };
-      getReleaseByTag.resolves({
-        upload_url: 'url',
-        assets: [
-          {
-            id: 1,
-            name: path.basename(__filename),
-            url: 'assetUrl',
-          },
-        ],
+      getReleaseByTag.resolves({});
+
+      githubRepo._uploadAsset = sinon
+        .stub()
+        .onFirstCall()
+        .rejects({ message: 'failed to upload', status: 500 })
+        .onSecondCall()
+        .resolves(true);
+
+      await githubRepo.uploadReleaseAsset(release.tag, {
+        path: __filename,
+        contentType: 'xyz',
       });
-      deleteReleaseAsset.resolves();
 
-      const error: Error & {
-        status?: number;
-      } = new Error('ECONNRESET');
-      error.status = 500;
-      octoRequest.rejects(error);
-
-      try {
-        await githubRepo.uploadReleaseAsset(release.tag, {
-          path: __filename,
-          contentType: 'xyz',
-        });
-      } catch (e) {
-        expect(deleteReleaseAsset).to.have.been.calledTwice;
-        expect(octoRequest).to.have.been.calledTwice;
-
-        return expect((e as Error).message).to.contain(
-          'ECONNRESET'
-        );
-      }
-      expect.fail('Expected error');
+      expect(githubRepo._uploadAsset).to.have.been.calledTwice;
     });
 
     it('fails if no release can be found', async() => {
@@ -477,18 +463,18 @@ describe('GithubRepo', () => {
         tag: 'v0.8.0',
         notes: '',
       };
-      getReleaseByTag.resolves(undefined);
+      getReleaseByTag.rejects(new Error('no release'));
       try {
         await githubRepo.uploadReleaseAsset(release.tag, {
           path: 'path',
           contentType: 'xyz',
         });
+        expect.fail('Expected uploadReleaseAsset to throw');
       } catch (e) {
-        return expect((e as Error).message).to.contain(
-          'Could not look up release for tag'
+        expect((e as Error).message).to.contain(
+          'no release'
         );
       }
-      expect.fail('Expected error');
     });
   });
 
@@ -560,13 +546,13 @@ describe('GithubRepo', () => {
       });
 
       it('fails if no release can be found', async() => {
-        getReleaseByTag.resolves(undefined);
+        getReleaseByTag.rejects(new Error('no release'));
         try {
           await githubRepo.promoteRelease({ version: '0.8.0' } as any);
+          expect.fail('Expected promoteRelease to throw');
         } catch (e) {
-          return expect((e as Error).message).to.contain('Release for v0.8.0 not found');
+          expect((e as Error).message).to.contain('no release');
         }
-        expect.fail('Expected error');
       });
     });
   });

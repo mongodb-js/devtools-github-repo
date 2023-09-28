@@ -55,25 +55,51 @@ type Branch = {
 
 const setTimeoutAsync = promisify(setTimeout);
 
-async function waitFor(
-  fn: (...args: unknown[]) => Promise<unknown>,
-  timeout = 10000,
+function throwRetryableError(message: string): never {
+  const err = new Error(message);
+  (err as any).retry = true;
+  throw err;
+}
+
+function isRetryableError(err: any): boolean {
+  return err.retry === true;
+}
+
+function isOctokitError(err: any): err is OctokitRequestError {
+  return 'status' in err;
+}
+
+async function waitFor<T>(
+  fn: (...args: unknown[]) => Promise<T>,
+  timeout = 60_000,
   interval = 100,
-  message = 'Timeout exceeded for task'
-) {
-  let done = false;
+  message: string | ((err: any) => string) = 'Timeout exceeded for task',
+  signal?: AbortSignal
+): Promise<T> {
+  let lastError: any;
+  const controller = new AbortController();
+  // eslint-disable-next-line chai-friendly/no-unused-expressions
+  signal?.addEventListener('abort', () => {
+    controller.abort(signal.reason);
+  });
   const tid = setTimeout(() => {
-    done = true;
+    controller.abort(
+      signal?.reason ??
+        new Error(typeof message === 'function' ? message(lastError) : message)
+    );
   }, timeout);
   try {
-    while (!done) {
-      const res = await fn();
-      if (res) {
-        return res;
+    while (!controller.signal.aborted) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+        await setTimeoutAsync(interval);
       }
-      await setTimeoutAsync(interval);
     }
-    throw new Error(message);
+    // If we ended up here either timeout expired or passed signal was aborted,
+    // either way this inter
+    throw controller.signal.reason;
   } finally {
     clearTimeout(tid);
   }
@@ -158,8 +184,13 @@ export class GithubRepo {
    * @param release The release details
    */
   async updateDraftRelease(release: Release): Promise<void> {
-    const existingRelease = await this.getReleaseByTag(release.tag);
-    if (!existingRelease) {
+    let existingRelease: ReleaseDetails | null = null;
+
+    try {
+      existingRelease = await this.getReleaseByTag(release.tag);
+    } catch {
+      // If we failed to get release by tag for whatever reason, try creating a
+      // new one
       await this.octokit.repos
         .createRelease({
           ...this.repo,
@@ -169,27 +200,11 @@ export class GithubRepo {
           draft: true,
         })
         .catch(this._ignoreAlreadyExistsError());
-      // Confirm that release is created before proceeding
-      await waitFor(
-        async() => {
-          try {
-            return await this.getReleaseByTag(release.tag);
-          } catch (err) {
-            // Handle server errors as no release found in this case to allow
-            // network hiccup retries
-            if ('status' in (err as Error & { status?: number })) {
-              return;
-            }
-            throw err;
-          }
-        },
-        process.env.TEST_GET_RELEASE_TIMEOUT
-          ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
-          : 10000,
-        100,
-        `Draft release "${release.name}" still doesn't exist after creating`
-      );
-    } else if (!existingRelease.draft) {
+
+      existingRelease = await this.getReleaseByTag(release.tag);
+    }
+
+    if (!existingRelease.draft) {
       throw new Error(
         'Cannot update an existing release after it was published'
       );
@@ -205,17 +220,31 @@ export class GithubRepo {
     }
   }
 
-  async _uploadAsset(releaseDetails: ReleaseDetails, asset: Asset): Promise<void> {
+  async _uploadAsset(
+    releaseDetails: ReleaseDetails,
+    asset: Asset
+  ): Promise<void> {
     const assetName = asset.name ?? path.basename(asset.path);
     const existingAsset = releaseDetails.assets?.find(
       (a) => a.name === assetName
     );
 
     if (existingAsset) {
-      await this.octokit.repos.deleteReleaseAsset({
-        ...this.repo,
-        asset_id: existingAsset.id,
-      });
+      try {
+        await this.octokit.repos.deleteReleaseAsset({
+          ...this.repo,
+          asset_id: existingAsset.id,
+        });
+      } catch (err) {
+        if ((err as OctokitRequestError).status === 404) {
+          // Sometimes the file would be in release details, but not acually
+          // fully uploaded (potentially on retries?), leading to 404 errors
+          // when trying to delete it. Ignore 404 errors for that reason. If
+          // file actually exists, trying to upload it will fail anyway even if
+          // we ignored the error here
+        }
+        throw err;
+      }
     }
 
     const params = {
@@ -237,46 +266,78 @@ export class GithubRepo {
    */
   async uploadReleaseAsset(releaseTag: string, assets: Asset | Asset[]): Promise<void> {
     const releaseDetails = await this.getReleaseByTag(releaseTag);
-    if (releaseDetails === undefined) {
-      throw new Error(`Could not look up release for tag ${releaseTag}`);
-    }
     if (!Array.isArray(assets)) {
       assets = [assets];
     }
     // Doing in sequence to not overload GitHub with requests
     for (const asset of assets) {
-      try {
-        await this._uploadAsset(releaseDetails, asset);
-      } catch (err) {
-        const status = (err as OctokitRequestError)?.status;
-        if (status >= 500 && status <= 599) {
-          // Sometimes GitHub returns ECONNRESET errors, wait a second and retry.
-          await setTimeoutAsync(1000);
-          await this._uploadAsset(releaseDetails, asset);
-        } else {
-          throw err;
-        }
-      }
+      const controller = new AbortController();
+      await waitFor(
+        async() => {
+          try {
+            await this._uploadAsset(releaseDetails, asset);
+          } catch (err) {
+            if (!isOctokitError(err) && !isRetryableError(err)) {
+              controller.abort(err);
+            }
+            throw err;
+          }
+        },
+        process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT
+          ? Number(process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT)
+          // File upload is slow, we allow 5 minutes per file to allow for additional retries
+          : 60_000 * 5,
+        100,
+        (lastError) => {
+          return `Failed to upload asset ${asset.name}` + lastError
+            ? `\n\nLast encountered error:\n\n${lastError?.stack}`
+            : '';
+        },
+        controller.signal
+      );
     }
   }
 
-  async getReleaseByTag(tag: string): Promise<ReleaseDetails | undefined> {
-    const releases = await this.octokit.paginate<ReleaseDetails>(
-      'GET /repos/:owner/:repo/releases',
-      this.repo
+  async getReleaseByTag(tag: string): Promise<ReleaseDetails> {
+    const controller = new AbortController();
+    return await waitFor(
+      async() => {
+        try {
+          const releases = await this.octokit.paginate<ReleaseDetails>(
+            'GET /repos/:owner/:repo/releases',
+            this.repo
+          );
+          const taggedRelease = releases.find(
+            ({ tag_name }) => tag_name === tag
+          );
+          if (!taggedRelease) {
+            throwRetryableError(`Can\'t find release with a tag ${tag}`);
+          }
+          return taggedRelease;
+        } catch (err) {
+          if (!isOctokitError(err) && !isRetryableError(err)) {
+            controller.abort(err);
+          }
+          throw err;
+        }
+      },
+      process.env.TEST_GET_RELEASE_TIMEOUT
+        ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
+        : 60_000,
+      100,
+      (lastError) => {
+        return "Can't fetch releases from GitHub" + lastError
+          ? `\n\nLast encountered error:\n\n${lastError?.stack}`
+          : '';
+      },
+      controller.signal
     );
-
-    return releases.find(({ tag_name }) => tag_name === tag);
   }
 
   async promoteRelease(config: {version: string}): Promise<string> {
     const tag = `v${config.version}`;
 
     const releaseDetails = await this.getReleaseByTag(tag);
-
-    if (!releaseDetails) {
-      throw new Error(`Release for ${tag} not found.`);
-    }
 
     if (!releaseDetails.draft) {
       console.info(`Release for ${tag} is already public.`);
