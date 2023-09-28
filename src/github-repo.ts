@@ -223,7 +223,7 @@ export class GithubRepo {
   async _uploadAsset(
     releaseDetails: ReleaseDetails,
     asset: Asset
-  ): Promise<boolean> {
+  ): Promise<void> {
     const assetName = asset.name ?? path.basename(asset.path);
     const existingAsset = releaseDetails.assets?.find(
       (a) => a.name === assetName
@@ -258,8 +258,6 @@ export class GithubRepo {
     };
 
     await this.octokit.request(params);
-
-    return true;
   }
 
   /**
