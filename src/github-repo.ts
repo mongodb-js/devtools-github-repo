@@ -73,10 +73,13 @@ async function waitFor<T>(
   fn: (...args: unknown[]) => Promise<T>,
   timeout = 60_000,
   interval = 100,
-  message: string | ((err: any) => string) = 'Timeout exceeded for task',
+  message:
+    | string
+    | ((err: any, attempts: number) => string) = 'Timeout exceeded for task',
   signal?: AbortSignal
 ): Promise<T> {
   let lastError: any;
+  let attempts = 0;
   const controller = new AbortController();
   // eslint-disable-next-line chai-friendly/no-unused-expressions
   signal?.addEventListener('abort', () => {
@@ -84,13 +87,15 @@ async function waitFor<T>(
   });
   const tid = setTimeout(() => {
     controller.abort(
-      signal?.reason ??
-        new Error(typeof message === 'function' ? message(lastError) : message)
+      new Error(
+        typeof message === 'function' ? message(lastError, attempts) : message
+      )
     );
   }, timeout);
   try {
     while (!controller.signal.aborted) {
       try {
+        attempts++;
         return await fn();
       } catch (err) {
         lastError = err;
@@ -98,7 +103,7 @@ async function waitFor<T>(
       }
     }
     // If we ended up here either timeout expired or passed signal was aborted,
-    // either way this inter
+    // either way this internal controller was aborted with a correct reason
     throw controller.signal.reason;
   } finally {
     clearTimeout(tid);
@@ -285,13 +290,16 @@ export class GithubRepo {
         },
         process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT
           ? Number(process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT)
-          // File upload is slow, we allow 5 minutes per file to allow for additional retries
-          : 60_000 * 5,
+          // File upload is slow, we allow 10 minutes per file to allow for additional retries
+          : 60_000 * 10,
         100,
-        (lastError) => {
-          return `Failed to upload asset ${asset.name}` + lastError
-            ? `\n\nLast encountered error:\n\n${lastError?.stack}`
-            : '';
+        (lastError, attempts) => {
+          return (
+            `Failed to upload asset ${path.basename(asset.path)} after ${attempts} attempts` +
+            (lastError
+              ? `\n\nLast encountered error:\n\n${this._getErrorMessage(lastError)}`
+              : '')
+          );
         },
         controller.signal
       );
@@ -325,10 +333,13 @@ export class GithubRepo {
         ? Number(process.env.TEST_GET_RELEASE_TIMEOUT)
         : 60_000,
       100,
-      (lastError) => {
-        return "Can't fetch releases from GitHub" + lastError
-          ? `\n\nLast encountered error:\n\n${lastError?.stack}`
-          : '';
+      (lastError, attempts) => {
+        return (
+          `Failed to fetch releases from GitHub after ${attempts} attempts` +
+          (lastError
+            ? `\n\nLast encountered error:\n\n${this._getErrorMessage(lastError)}`
+            : '')
+        );
       },
       controller.signal
     );
@@ -501,5 +512,18 @@ export class GithubRepo {
       error.errors.length === 1 &&
       error.errors[0].code === 'already_exists'
     );
+  }
+
+  private _getErrorMessage(_err: any): string {
+    if (_err.status) {
+      return (
+        (_err as OctokitRequestError).errors
+          ?.map((err) => err.message ?? null)
+          .filter((msg): msg is string => !!msg)
+          .join('\n\n')
+          .trim() || `Octokit request failed with ${_err.name} (${_err.status})`
+      );
+    }
+    return _err.stack ?? _err.message;
   }
 }

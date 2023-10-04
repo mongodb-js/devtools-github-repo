@@ -323,7 +323,7 @@ describe('GithubRepo', () => {
     let deleteReleaseAsset: sinon.SinonStub;
 
     before(function() {
-      process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT = '1000';
+      process.env.TEST_UPLOAD_RELEASE_ASSET_TIMEOUT = '500';
     });
 
     after(function() {
@@ -455,6 +455,33 @@ describe('GithubRepo', () => {
       });
 
       expect(githubRepo._uploadAsset).to.have.been.calledTwice;
+    });
+
+    it('eventually fails if oktokit continues to fail', async function() {
+      const release = {
+        name: 'release',
+        tag: 'v0.8.0',
+        notes: '',
+      };
+
+      getReleaseByTag.resolves({});
+
+      githubRepo._uploadAsset = sinon
+        .stub()
+        .rejects({ message: 'request failed', status: 500 });
+
+      try {
+        await githubRepo.uploadReleaseAsset(release.tag, {
+          path: '/foo/bar/upload.zip',
+          contentType: 'xyz',
+        });
+        expect.fail('Expected uploadReleaseAsset to throw');
+      } catch (err) {
+        expect(err)
+          .to.have.property('message')
+          .match(/Failed to upload asset upload.zip after \d+ attempts/)
+          .match(/Octokit request failed/);
+      }
     });
 
     it('fails if no release can be found', async() => {
