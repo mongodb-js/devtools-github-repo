@@ -102,6 +102,7 @@ describe('GithubRepo', () => {
     it('returns undefined if there is no matching tag', async() => {
       githubRepo = getTestGithubRepo({
         paginate: sinon.stub().resolves([
+          { name: 'unrelatedpkg@v1.2.3', commit: { sha: 'sha-1' } },
           { name: 'v0.0.6', commit: { sha: 'sha-1' } },
           { name: 'v0.0.3-draft.0', commit: { sha: 'sha-2' } },
           { name: 'v0.0.3-draft.1', commit: { sha: 'sha-3' } },

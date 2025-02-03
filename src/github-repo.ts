@@ -167,6 +167,8 @@ export class GithubRepo {
 
   /**
    * Get all tags from the Github repository, sorted by highest version to lowest version.
+   * Tagged package releases (e.g. `foo@v2.3.4`) are sorted alphabetically, following tags
+   * that are not associated with a specific package.
    */
   private async getTagsOrdered(): Promise<Tag[]> {
     const tags = await this.octokit.paginate<{name: string, commit: {sha: string}}>(
@@ -178,8 +180,13 @@ export class GithubRepo {
       .map((t) => ({
         name: t.name,
         sha: t.commit.sha,
+        compareKey: ['', ...t.name.split('@')].slice(-2) // [pkgname | '', semver]
       }))
-      .sort((t1, t2) => -1 * semver.compare(t1.name, t2.name));
+      .sort((t1, t2) => {
+        if (t1.compareKey[0] < t2.compareKey[0]) return -1;
+        if (t1.compareKey[0] > t2.compareKey[0]) return 1;
+        return semver.rcompare(t1.compareKey[1], t2.compareKey[1]);
+      }).map(({ name, sha }) => ({ name, sha }));
   }
 
   /**
