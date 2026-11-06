@@ -6,16 +6,16 @@ const ruleOverridesForJs = Object.keys(typescriptEslintEslintPlugin.rules).reduc
 );
 
 module.exports = {
+  env: { node: true, es6: true, mocha: true },
   plugins: ['mocha'],
   extends: [
-    'eslint-config-mongodb-js/react',
+    'eslint:recommended',
     'plugin:@typescript-eslint/recommended'
   ],
   rules: {
     'object-curly-spacing': [2, 'always'],
     'no-empty-function': 0,
     'valid-jsdoc': 0,
-    'react/sort-comp': 0, // does not seem work as expected with typescript
     '@typescript-eslint/no-empty-function': 0,
     '@typescript-eslint/no-use-before-define': 0,
     '@typescript-eslint/no-explicit-any': 0,

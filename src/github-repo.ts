@@ -81,7 +81,6 @@ async function waitFor<T>(
   let lastError: any;
   let attempts = 0;
   const controller = new AbortController();
-  // eslint-disable-next-line chai-friendly/no-unused-expressions
   signal?.addEventListener('abort', () => {
     controller.abort(signal.reason);
   });
@@ -326,7 +325,7 @@ export class GithubRepo {
             ({ tag_name }) => tag_name === tag
           );
           if (!taggedRelease) {
-            throwRetryableError(`Can\'t find release with a tag ${tag}`);
+            throwRetryableError(`Can't find release with a tag ${tag}`);
           }
           return taggedRelease;
         } catch (err) {
